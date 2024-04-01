@@ -11,6 +11,23 @@ module.exports = {
         path: path.resolve(process.cwd(), 'dist'),
         filename: "bundle.min.js"
     },
+    resolve: {
+      fallback: {
+        "fs": false,
+        "tls": false,
+        "net": false,
+        "path": false,
+        "zlib": false,
+        "http": false,
+        "https": false,
+        "stream": false,
+        "crypto": false,
+        "stream": require.resolve("stream-browserify"),
+        "os": require.resolve("os-browserify/browser"),
+        "buffer": require.resolve("buffer"),
+        "process": require.resolve('process/browser')
+      }
+    },
     module: {
         rules: [
             {
@@ -46,6 +63,12 @@ module.exports = {
         }),
         new HtmlWebpackPlugin({
             template: "./index.html"
+        }),
+        new webpack.ProvidePlugin({
+            process: 'process/browser',
+        }),
+        new webpack.ProvidePlugin({
+            Buffer: ['buffer', 'Buffer'],
         })
     ]
 };

@@ -1,0 +1,502 @@
+//https://www.shadertoy.com/view/3dt3D8
+
+#ifdef GL_ES
+precision highp float;
+#endif
+
+// glslsandbox uniforms
+uniform float time;
+uniform vec2 resolution;
+
+in vec2 fragCoord;
+out vec4 fragOutput;
+
+// shadertoy globals
+#define iTime time
+#define iResolution resolution
+
+uniform float     iChannelTime[4];
+uniform float     iBlockOffset; 
+uniform vec4      iDate;
+uniform float     iSampleRate;
+uniform vec3      iChannelResolution[4];
+uniform sampler2D iChannel0;
+
+/*
+"Music synthesizer" by Emmanuel Keller aka Tambako - September 2019
+License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
+Contact: tamby@tambako.ch
+*/
+
+#define tpi 6.2831
+
+//#define ZERO 0
+#define ZERO int(min(time,0.))
+
+// note frequencies
+#define FC  261.626
+#define FCH 277.183
+#define FD  293.665
+#define FDH 311.127
+#define FE  329.628
+#define FF  349.228
+#define FFH 369.994
+#define FG  391.995
+#define FGH 415.305
+#define FA  440.000
+#define FAH 466.164
+#define FB  493.883
+
+struct Note
+{
+   float freq;
+   float octave;
+   float velocity;
+   float length;
+   float gateOpening;
+};
+
+struct Track
+{
+   float playtime;
+   float loopBars;
+   float tVolume;
+   float tTune;
+   float tBalance;
+   int instrumentNr;
+   vec3 color;
+};
+    
+struct Instrument
+{
+   float iVolume;
+   int waveform;
+   vec3 wfParams;
+   vec4 envelope;
+   vec4 fmParams;
+   vec3 detuneParams;
+   vec3 echoParams;
+};
+    
+Track tracks[6];
+Instrument instruments[5];
+
+int chordNr;
+vec2[4] bassNotes;
+float bassNote;
+float bassOctave;
+vec3[5] rChord;
+vec3[5] padChord;
+float arpOctave = 6.;
+float arpNote1;
+float arpNote2;
+float arpNote3;
+
+float bartime;
+float barnr0;
+float barnr;
+
+bool onlyEnvelope;
+
+// General options
+//#define SOLO_TRACK 6
+#define VIZUALISATION
+#define NEW_CHORDS
+//#define ECHO
+
+const float bpm = 132.;
+const float startTime = -0.5;
+const float gvolume = 0.15;
+const float gtune = 1.;
+const float stereoPhase = 0.25;
+
+void init(float time)
+{
+   bartime = 240./bpm;
+   barnr0 = time/bartime;
+   barnr = floor(barnr0);
+   chordNr = int(mod(barnr/2., 4.));
+    
+   // Song progression
+   // Melody
+   float track1On = mod(barnr, 64.)>=16.?1.:0.;
+   // Bass
+   float track2On = barnr>=4.?(mod(barnr, 64.)<56.?1.:0.):0.;
+   // Chords
+   float track3On = barnr>=8.?(barnr<48.?smoothstep(40., 32., barnr0):1.):0.;
+   // Pad
+   float track4On = mod(barnr, 64.)<48.?(barnr>=64.?smoothstep(64., 72., barnr0):1.):0.;
+   // Arp
+   float track5On = mod(barnr, 64.)>=24.?1.:0.;
+   // Beat
+   float track6On = barnr>=8.?1.:0.;
+    
+   // Melody
+   tracks[0] = Track(0., 2., track1On*1.15, 1., -0.1, 1, vec3(1., 0.7, 0.5));
+   // Bass
+   tracks[1] = Track(0., 0.5, track2On*0.9, 1., 0., 3, vec3(0.3, 1., 0.9));
+   // Chords
+   tracks[2] = Track(0., 0.5, track3On*0.4, 1., 0.25, 2, vec3(1., 0.9, 0.6));
+   // Pad
+   tracks[3] = Track(-0.5, 2., track4On*0.27, 1., -0.25, 4, vec3(0.3, 0.9, 1.3));
+   // Arp
+   tracks[4] = Track(0., 0.125, track5On*0.28, 1., 0.5*sin(1.2*time), 5, vec3(2.2, 0.3, 1.3));
+   // Beat
+   tracks[5] = Track(0., 1., track6On*1.5, 1., 0., 1, vec3(1., 1., 1.));
+    
+   // Melody
+   instruments[0] = Instrument(1., 1, vec3(0.18 + 0.12*sin(30.*time), 0., 0.), vec4(0.02, 0.2, 0.5, 0.5), vec4(0.3, 5., 0., 3.), vec3(0., 0, 0.1), vec3(7, 0.65, 5.));
+   // Chords
+   instruments[1] = Instrument(1., 2, vec3(0.3, 2., 0.), vec4(0.001, 0.2, 0.55, 1.1), vec4(0.9, 1.5, 0., 5.), vec3(0.13, 9, 0.15), vec3(0, 1., 8.));
+   // Bass
+   instruments[2] = Instrument(1., 1, vec3(.7, 1., 0.), vec4(0.04, 0.02, 0.8, 0.05), vec4(1.1, 2., 0., 8.), vec3(0., 0, 0.1), vec3(0, 1., 8.));
+   // Pad
+   instruments[3] = Instrument(1., 4, vec3(0.85, 1.1, 0.), vec4(1.8, 0.15, 1., 1.8), vec4(0.22, 3., 0., 0.4), vec3(0.25, 5, 0.5), vec3(0, 1., 8.));  
+   // Arp
+   instruments[4] = Instrument(1., 3, vec3(1. - 0.25*sin(0.9*time), 10., 0.), vec4(0.003, 0.01, 1., 0.05), vec4(1.1 - 0.5*sin(1.7*time), 2.5, 0., 15.), vec3(0., 0, 0.1), vec3(0, 1., 8.));
+    
+   // Main notes and chords
+   #ifdef NEW_CHORDS
+   if (chordNr==0) {bassNote=FD; bassOctave=1.;}
+   if (chordNr==1) {bassNote=FF; bassOctave=1.;}
+   if (chordNr==2) {bassNote=FG; bassOctave=0.;}
+   if (chordNr==3) {bassNote=FE; bassOctave=1.;}  
+    
+   if (chordNr==0) rChord = vec3[](vec3(FD, 4., .5), vec3(FFH, 4., .5), vec3(FA, 4., .5), vec3(FD, 5., .3), vec3(FD, 6., .15));
+   if (chordNr==1) rChord = vec3[](vec3(FF, 4., .5), vec3(FA, 4., .5), vec3(FC, 4., .5), vec3(FF, 5., .3), vec3(FF, 6., .15));
+   if (chordNr==2) rChord = vec3[](vec3(FG, 4., .5), vec3(FB, 4., .5), vec3(FD, 4., .5), vec3(FD, 5., .3), vec3(FD, 6., .15));
+   if (chordNr==3) rChord = vec3[](vec3(FE, 4., .5), vec3(FG, 4., .5), vec3(FC, 4., .5), vec3(FC, 5., .3), vec3(FC, 6., .15));
+    
+   if (chordNr==0) padChord = vec3[](vec3(FD, 3., .5), vec3(FFH, 3., .5), vec3(FA, 3., .5), vec3(FD, 2., .2), vec3(FD, 1., .1));
+   if (chordNr==1) padChord = vec3[](vec3(FF, 3., .5), vec3(FA, 3., .5), vec3(FC, 3., .5), vec3(FF, 2., .2), vec3(FF, 1., .1));
+   if (chordNr==2) padChord = vec3[](vec3(FG, 3., .5), vec3(FB, 3., .5), vec3(FD, 3., .5), vec3(FD, 2., .2), vec3(FD, 1., .1));
+   if (chordNr==3) padChord = vec3[](vec3(FE, 3., .5), vec3(FG, 3., .5), vec3(FC, 3., .5), vec3(FC, 2., .2), vec3(FC, 1., .1));
+
+   if (chordNr==0) {arpNote1=FD; arpNote2=FFH; arpNote3=FA;}
+   if (chordNr==1) {arpNote1=FF; arpNote2=FA; arpNote3=FC;}
+   if (chordNr==2) {arpNote1=FG; arpNote2=FB; arpNote3=FD;}    
+   if (chordNr==3) {arpNote1=FE; arpNote2=FG; arpNote3=FC;}      
+   #else
+   if (chordNr==0) {bassNote=FD; bassOctave=1.;}
+   if (chordNr==1) {bassNote=FF; bassOctave=1.;}
+   if (chordNr==2) {bassNote=FA; bassOctave=0.;}
+   if (chordNr==3) {bassNote=FE; bassOctave=1.;}  
+    
+   if (chordNr==0) rChord = vec3[](vec3(FD, 4., .5), vec3(FF, 4., .5), vec3(FA, 4., .5), vec3(FD, 5., .3), vec3(FD, 6., .15));
+   if (chordNr==1) rChord = vec3[](vec3(FF, 4., .5), vec3(FA, 4., .5), vec3(FC, 4., .5), vec3(FF, 5., .3), vec3(FF, 6., .15));
+   if (chordNr==2) rChord = vec3[](vec3(FA, 4., .5), vec3(FC, 4., .5), vec3(FE, 4., .5), vec3(FA, 5., .3), vec3(FA, 6., .15));
+   if (chordNr==3) rChord = vec3[](vec3(FE, 4., .5), vec3(FGH, 4., .5), vec3(FB, 4., .5), vec3(FE, 5., .3), vec3(FE, 6., .15));
+    
+   if (chordNr==0) padChord = vec3[](vec3(FD, 3., .5), vec3(FF, 3., .5), vec3(FA, 3., .5), vec3(FD, 2., .2), vec3(FD, 1., .1));
+   if (chordNr==1) padChord = vec3[](vec3(FF, 3., .5), vec3(FA, 3., .5), vec3(FC, 3., .5), vec3(FF, 2., .2), vec3(FF, 1., .1));
+   if (chordNr==2) padChord = vec3[](vec3(FA, 3., .5), vec3(FC, 3., .5), vec3(FE, 3., .5), vec3(FA, 2., .2), vec3(FA, 1., .1));
+   if (chordNr==3) padChord = vec3[](vec3(FE, 3., .5), vec3(FGH, 3., .5), vec3(FB, 3., .5), vec3(FE, 2., .2), vec3(FE, 1., .1));
+
+   if (chordNr==0) {arpNote1=FD; arpNote2=FF; arpNote3=FA;}
+   if (chordNr==1) {arpNote1=FF; arpNote2=FA; arpNote3=FC;}
+   if (chordNr==2) {arpNote1=FA; arpNote2=FC; arpNote3=FE;}
+   if (chordNr==3) {arpNote1=FE; arpNote2=FGH; arpNote3=FB;}  
+   #endif
+}
+
+float hash(float p)
+{
+    p = fract(p*(258.6 + 0.00007*(fract(p*0.55))));
+    p *= p + 353.33;
+    p *= p + p;
+    return fract(p);
+}
+
+float getFM(float time, float freq, vec4 FMParams)
+{
+   if (FMParams.x>0.)
+      return FMParams.x*sin(time*tpi*(freq*FMParams.y + FMParams.z))*exp(-FMParams.w*time);
+   else
+      return 0.;
+}
+
+vec2 balance(float b)
+{
+    return vec2(clamp(1. - b, 0., 1.), clamp(b + 1., 0., 1.));
+}
+
+float osc(int instrument, float time, int waveform, float ampl, float freq, float phase, float p1, float p2, float p3)
+{    
+   freq+= getFM(time, freq, instruments[instrument].fmParams);    
+    
+   // Sin to Square, param1 = squareness
+   if (waveform==1)
+      return ampl*(2.*smoothstep(-p1*(1. - exp(-p2*time)), p1*(1. - exp(-p2*time)), sin(tpi*freq*time + phase*tpi)) - 1.);
+   // Triangle to sawtooth, param1 = type
+   if (waveform==2)
+   {
+      float tt = fract(freq*time + phase);
+      return ampl*(2.*smoothstep(0., p1*(1. - exp(-p2*time)), tt)*smoothstep(1., p1*(1. - exp(-p2*time)), tt) - 1.);
+   }
+   // Straigtened sine, param1 = offset
+   if (waveform==3)
+      return ampl*(2.*abs(sin(tpi*freq*time + phase*tpi) + p1*(1. - exp(-p2*time)))*2. - 1.);
+   // PWM Square, param1 = opening
+   if (waveform==4)
+   {
+      float tt = fract(freq*time + phase);
+      return ampl*(tt>p1*(1. - exp(-p2*time))?1.:-1.);
+   }    
+}
+
+vec2 stereoOsc(int instrument, float time, int waveform, float ampl, float freq, float p1, float p2, float p3)
+{
+   return vec2(osc(instrument, time, waveform, ampl, freq, 0., p1, p2, p3), osc(instrument, time, waveform, ampl, freq, stereoPhase, p1, p2, p3));
+}
+
+vec2 stereoOscDetune(int instrument, float time, int waveform, float ampl, float freq, float p1, float p2, float p3)
+{
+    vec2 s = vec2(0.);
+    int ns = int(instruments[instrument].detuneParams.y);
+    if (ns<2)
+       return stereoOsc(instrument, time, waveform, ampl, freq, p1, p2, p3);
+    else
+    {
+       for (int n = ZERO; n < ns; n++)
+       {
+          float fo = freq*0.01*instruments[instrument].detuneParams.x*float(n - ns/2);
+          float b = instruments[instrument].detuneParams.z*float(n - ns/2);
+           
+          s+= balance(b)*stereoOsc(instrument, time, waveform, ampl, freq + fo, p1, p2, p3); 
+       }
+    }
+    return s;
+}
+
+float envelope(float time, float a, float d, float s, float r, float noteDuration)
+{
+    float e = smoothstep(0., a, time);
+    e*= s + (1. - s)*smoothstep(a + d, a, time);
+    e*= smoothstep(noteDuration + r, noteDuration, time);
+    
+    return e;
+}
+
+vec2 note0(int track, float time, float freq, float octave, float velocity, float duration, float gateOpening)
+{
+   vec2 notev;
+   float ltime = time - tracks[track].playtime;
+   Instrument cInstrument = instruments[tracks[track].instrumentNr - 1];
+    
+   freq*= gtune*tracks[track].tTune; 
+    
+   if (velocity>0.)
+   {
+      freq*= pow(2., octave - 3.);
+       
+      float env = envelope(ltime, cInstrument.envelope.x, cInstrument.envelope.y, cInstrument.envelope.z, cInstrument.envelope.w, bartime/duration*gateOpening);
+       
+      if (ltime>0.)
+         if (onlyEnvelope)
+            notev = vec2(cInstrument.iVolume*env*velocity);
+         else
+            notev = balance(tracks[track].tBalance)*stereoOscDetune(tracks[track].instrumentNr - 1, ltime, cInstrument.waveform, cInstrument.iVolume*env*velocity, freq, cInstrument.wfParams.x, cInstrument.wfParams.y, cInstrument.wfParams.z);    
+      else
+         notev = vec2(0.);
+   }
+   
+   return notev;
+}
+
+vec2 note(int track, float time, float freq, float octave, float velocity, float duration, float gateOpening)
+{
+   vec2 note;
+   #ifdef ECHO
+   vec3 ep = instruments[tracks[track].instrumentNr - 1].echoParams;
+   if (ep.x<2.)
+      note = note0(track, time, freq, octave, velocity, duration, gateOpening);   
+   else
+   {
+      float a = 1.;
+      for (int n = ZERO; n < int(ep.x); n++)
+      {
+         note+= a*note0(track, time - float(n)*bartime/ep.z, freq, octave, velocity, duration, gateOpening);
+         a*= ep.y;
+      }
+   }
+   #else
+      note = note0(track, time, freq, octave, velocity, duration, gateOpening); 
+   #endif
+   
+   tracks[track].playtime+= bartime/duration;    
+   return note;
+}
+
+vec2 chord(int track, float time, vec3[5] notes, float duration, float gateOpening)
+{
+   vec2 notev = vec2(0.);
+    
+   for (int n = ZERO; n < 5; n++)
+   {
+      notev+= note(track, time, notes[n].x, notes[n].y, notes[n].z, duration, gateOpening);
+      if (n<4)
+         tracks[track].playtime-= bartime/duration;
+   }
+    
+   return notev;
+}
+
+void pause(int track, float duration)
+{
+    tracks[track].playtime+= bartime/duration;   
+}
+
+vec2 drum(int track, float time, float duration, float freq, float ba, float fd, float d1, float d2, float a1, float a2, float nl, float nd, float nf, float drb)
+{
+    float v;
+    
+    float t = time - tracks[track].playtime;    
+    if (t>0.)
+    {
+       float f = freq*exp(-fd*t);
+       float a = onlyEnvelope?0.05:sin(tpi*f*t*0.5);
+       v = 0.3*ba*clamp(a*a1,-1.0,1.0)*(exp(-d1*t) + exp(-d2*t));
+       v+= a*a2*ba*exp(-1.0*t);
+        
+       float tnf2 = t*nf*(1. - 0.00012*exp(-nd*t*2.));
+       v+= clamp(nl*(onlyEnvelope?0.2:(hash(tnf2) - hash(tnf2 + 0.025)))*exp(-nd*t), -1., 1.);
+    }
+    tracks[track].playtime+= bartime/duration; 
+    
+    return (onlyEnvelope?vec2(1.):balance(drb)*balance(tracks[track].tBalance))*vec2(v);
+}
+
+vec2 playTrack0(int track, float time)
+{
+   vec2 sound = vec2(0.);
+   //float btime = mod(time, bartime*tracks[track - 1].loopBars);
+   float btime = time;
+   
+   // Melody
+   if (track==1)
+   {
+      #ifdef NEW_CHORDS
+      sound+= note(track - 1, btime, (chordNr==3)?FE:FD, 3., 1., 2., .5);
+      sound+= note(track - 1, btime, (chordNr==3)?FG:FA, 3., 1., 4., .4);
+      sound+= note(track - 1, btime, FC, 4., 1., 4., .7);
+      pause(track - 1, 8.);
+      sound+= note(track - 1, btime, FA, 4., .8, 8., .5);
+      sound+= note(track - 1, btime, (chordNr==3)?FE:FD, 5., .7, 8., .4);
+      sound+= note(track - 1, btime, FC, 5., .6, 4., .7);
+      #else
+      sound+= note(track - 1, btime, FD, 3., 1., 2., .5);
+      sound+= note(track - 1, btime, FA, 3., 1., 4., .4);
+      sound+= note(track - 1, btime, FEH, 3., 1., 4., .7);
+      pause(track - 1, 8.);
+      sound+= note(track - 1, btime, FA, 4., .8, 8., .5);
+      sound+= note(track - 1, btime, FD, 5., .7, 8., .4);
+      sound+= note(track - 1, btime, FA, 4., .6, 4., .7);       
+      #endif
+   }
+   // Bass
+   if (track==2)
+   {    
+      pause(track - 1, 8.);
+      sound+= note(track - 1, btime, bassNote, bassOctave, 1., 4., .45);
+      sound+= note(track - 1, btime, bassNote, bassOctave, 1., 4., .45);
+   }
+   // Chords
+   if (track==3)
+   {       
+      sound+= chord(track - 1, btime, rChord, 4., .5);
+      sound+= chord(track - 1, btime, rChord, fract(barnr0)<0.5?8.:16., .5);
+      sound+= chord(track - 1, btime, rChord, 8., .5); 
+   }
+   // Pad
+   if (track==4)
+   {       
+      sound+= chord(track - 1, btime, padChord, 0.5, 0.82);
+   }
+   // Arp
+   if (track==5)
+   {       
+      sound+= note(track - 1, btime, arpNote1, arpOctave, 1., 24., .45);
+      sound+= note(track - 1, btime, arpNote2, arpOctave, 1., 24., .45);
+      sound+= note(track - 1, btime, arpNote3, arpOctave - 1., 1., 24., .45); 
+   }
+   // Beat
+   if (track==6)
+   {
+      bool sdf = mod(barnr, 16.)==15.;
+      float bdl = mod(barnr, 16.)<15.?1.17:0.;
+      float bdb = 0.;
+      float sndb = 0.;
+      float sdd = 55.;
+      float snl = mod(barnr, 64.)>=16.?25.:0.;
+      float hhd = 12.;
+      float hhl = mod(barnr, 64.)>=24.?1.8:0.;
+      float hhb = 0.28;
+      float chhd = 78.;
+      float chhl = mod(barnr, 64.)>=32.?1.3:0.;
+      float chhb = -0.45;
+       
+      if (mod(barnr, 8.)==0.)
+      {
+         sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, 1.9, 2.3, 130., 0.);
+         tracks[track - 1].playtime-= bartime/16.;
+      }
+      sound+= drum(track - 1, btime, 16., 340., bdl, 7.5, 12., 8., 12., 1.5, 0.2, 80., 100., bdb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, chhl, chhd, 300., chhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, hhl, hhd, 301., hhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, chhl, chhd, 300., chhb);
+      sound+= drum(track - 1, btime, 16., 340., bdl, 7.5, 12., 8., 12., 1.9, snl, sdd, 150., sndb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, chhl, chhd, 300., chhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, hhl, hhd, 301., hhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, chhl, chhd, 300., chhb);
+      sound+= drum(track - 1, btime, 16., 340., bdl, 7.5, 12., 8., 12., 1.5, 0.2, 80., 100., bdb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, chhl, chhd, 300., chhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, hhl, hhd, 301., hhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, chhl, chhd, 300., chhb);         
+      sound+= drum(track - 1, btime, 16., 340., bdl, 7.5, 12., 8., 12., 1.9, snl, sdd, 150., sndb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, sdf?snl:chhl, sdf?sdd:chhd, 300., sdf?sndb:chhb);
+      sound+= drum(track - 1, btime, 16., 340., mod(barnr, 2.)==0.?0.0:bdl, 7.5, 12., 8., 12., 1.4, sdf?snl:hhl, sdf?sdd:hhd, 301., sdf?sndb:hhb);
+      sound+= drum(track - 1, btime, 16., 340., 0.0, 7.5, 12., 8., 12., 1.4, sdf?snl:chhl, sdf?sdd:chhd, 300., sdf?sndb:chhb);  
+   }
+
+   return tracks[track - 1].tVolume*sound;
+}
+
+vec2 playTrack(int track, float time)
+{
+   vec2 sound = playTrack0(track, mod(time, bartime*tracks[track - 1].loopBars));
+   // Nice idea, but takes too much time to compile...
+   /*if (track==4 && time>bartime*tracks[track - 1].loopBars)
+   {
+       tracks[track - 1].playtime = -0.5;
+       init(time - bartime*tracks[track - 1].loopBars);
+       sound+= playTrack0(track, mod(time, bartime*tracks[track - 1].loopBars) + bartime*tracks[track - 1].loopBars);
+   }*/
+    
+   // Removes the stereo of of the bass
+   if (track==2)
+      sound = vec2(sound.x + sound.y);
+       
+   return sound;
+}
+
+
+vec2 mainSound( float time)
+{
+   float time2 = time + startTime;
+    
+   if (time2<0.)
+       return vec2(0.);    
+    
+   onlyEnvelope = false;
+   init(time2);
+   vec2 sound = vec2(0.);
+    
+   #ifdef SOLO_TRACK
+      sound = playTrack(SOLO_TRACK, time2);
+   #else
+   for (int t = 1; t <= tracks.length(); t++)
+      sound+= playTrack(t, time2);
+   #endif
+    
+   return gvolume*sound*exp(-0.24*max(time2 - 165., 0.))*smoothstep(180., 175., time2);
+}

@@ -5,16 +5,29 @@ const path = require("path");
 const TerserPlugin = require("terser-webpack-plugin");
 const webpack = require("webpack");
 
-const line = "---------------------------------------------------------";
-const msg = `❤️❤️❤️ Tell us about your game! - games@phaser.io ❤️❤️❤️`;
-process.stdout.write(`${line}\n${msg}\n${line}\n`);
-
 module.exports = {
     mode: "production",
     entry: "./src/main.js",
     output: {
         path: path.resolve(process.cwd(), 'dist'),
         filename: "./bundle.min.js"
+    },
+    resolve: {
+      fallback: {
+        "fs": false,
+        "tls": false,
+        "net": false,
+        "path": false,
+        "zlib": false,
+        "http": false,
+        "https": false,
+        "stream": false,
+        "crypto": false,
+        "stream": require.resolve("stream-browserify"),
+        "os": require.resolve("os-browserify/browser"),
+        "buffer": require.resolve("buffer"),
+        "process": require.resolve('process/browser')
+      }
     },
     devtool: false,
     performance: {
@@ -72,6 +85,12 @@ module.exports = {
                 { from: 'public/favicon.png', to: 'favicon.png' },
                 { from: 'public/style.css', to: 'style.css' }
             ],
+        }),
+        new webpack.ProvidePlugin({
+            process: 'process/browser',
+        }),
+        new webpack.ProvidePlugin({
+            Buffer: ['buffer', 'Buffer'],
         }),
     ]
 };
