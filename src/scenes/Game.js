@@ -13,6 +13,17 @@ export class Game extends Scene
 
     create ()
     {
+
+        this.add.image(612, 384, 'background');
+
+        this.add.image(612, 300, 'logo');
+
+        this.add.text(612, 460, 'You are now listening to\na GLSL audio file\nadapted from Shadertoy.com', {
+            fontFamily: 'Arial Black', fontSize: 38, color: '#ffffff',
+            stroke: '#000000', strokeThickness: 8,
+            align: 'center'
+        }).setOrigin(0.5);
+
     AudioShader(glslify(`// Notations :
 // t = absolute time in seconds
 // tb = time in beats
