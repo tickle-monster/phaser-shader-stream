@@ -33,6 +33,11 @@ export class Preloader extends Scene
         this.load.setPath('assets');
 
         this.load.image('logo', 'logo.png');
+        this.load.text('music1', 'glsl/music1.txt');
+        this.load.text('music2', 'glsl/music2.txt');
+        this.load.text('music3', 'glsl/music3.txt');
+        this.load.text('music4', 'glsl/music4.txt');
+        this.load.text('music5', 'glsl/music5.txt');
     }
 
     create ()
